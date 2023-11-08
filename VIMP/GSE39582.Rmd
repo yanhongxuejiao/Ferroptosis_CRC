@@ -1,0 +1,760 @@
+---
+title: "GSE39582"
+output: html_notebook
+---
+
+From a clinical and molecular perspective, colon cancer (CC) is a heterogeneous disease but to date no classification based on high-density transcriptome data has been established. The aim of this study was to build up a robust molecular classification of mRNA expression profiles (Affymetrix U133Plus2) of a large series of 443 CC and 19 non-tumoral colorectal mucosas, and to validate it on an independent serie of 123 CC and 906 public dataset. We identified and validated six molecular subtypes in this large cohort as a combination of multiple molecular processes that complement current disease stratification based on clinicopathological variables and molecular markers. The biological relevance of these subtypes was consolidated by significant differences in survival. These insights open new perspectives for improving prognostic models and targeted therapies.
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+## R markdown
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+getwd()
+```
+<!-- ## packages -->
+<!-- ```{r packages, echo=TRUE, warning=TRUE, paged.print=TRUE} -->
+<!-- install.packages("BiocManager") -->
+<!-- install.packages("forcats") -->
+<!-- install.packages("stringr") -->
+<!-- install.packages("ggplot2") -->
+<!-- install.packages("ggrepel") -->
+<!-- install.packages("readr") -->
+<!-- install.packages("tidyr") -->
+<!-- install.packages("survminer") -->
+<!-- BiocManager::install("GEOquery") -->
+<!-- BiocManager::install("limma") -->
+<!-- BiocManager::install("pheatmap") -->
+<!-- BiocManager::install("org.Hs.eg.db") -->
+<!-- ``` -->
+
+## import data
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+readr::local_edition(1) ##use old version of readr because of the error of GEOquery
+library(GEOquery)
+my_id<-"GSE39582"
+gse<-getGEO(my_id)
+```
+## check how many platforms used
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+length(gse)
+gse<-gse[[1]]
+gse
+
+pData(gse) ## print the sample information
+fData(gse) ## print the gene annotation
+exprs(gse) ## print the expression data
+```
+## Check the normalisation and scales used
+
+# exprs get the expression levels as a data frame and get the distribution
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+summary(exprs(gse))
+
+exprs(gse) <- log2(exprs(gse))
+boxplot(exprs(gse),outline=FALSE)
+```
+## Inspect the clinical variables
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+library(dplyr)
+
+sampleInfo <- pData(gse)
+sampleInfo
+
+```
+
+
+## restructure the data
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+library(dplyr)
+s_data <- sampleInfo %>% 
+  dplyr::select(geo_accession, contains("characteristics"), characteristics_ch1.2, characteristics_ch1.3, characteristics_ch1.4, characteristics_ch1.9, characteristics_ch1.13, characteristics_ch1.14, characteristics_ch1.22,-characteristics_ch1.5, -characteristics_ch1.6, -characteristics_ch1,-characteristics_ch1.7, -characteristics_ch1.8,-characteristics_ch1.10, -characteristics_ch1.11, -characteristics_ch1.12, -characteristics_ch1.15, -characteristics_ch1.16, -characteristics_ch1.17, -characteristics_ch1.18, -characteristics_ch1.19, -characteristics_ch1.20, -characteristics_ch1.21, -characteristics_ch1.23, -characteristics_ch1.24, -characteristics_ch1.25, -characteristics_ch1.26, -characteristics_ch1.27, -characteristics_ch1.28,-characteristics_ch1.29, -characteristics_ch1.30,-characteristics_ch1.31, -characteristics_ch1.32,)
+
+s_data <- s_data %>% 
+  dplyr::rename(sex = characteristics_ch1.2,
+                age = characteristics_ch1.3,
+                stage = characteristics_ch1.4,
+                chemotherapy = characteristics_ch1.9,
+                os.status = characteristics_ch1.13,
+                os.time = characteristics_ch1.14,
+                KRAS = characteristics_ch1.22
+)
+
+s_data <- s_data %>% 
+  mutate(sex = gsub("Sex: ", "", sex, fixed=TRUE),
+         age = as.numeric(gsub("age.at.diagnosis (year): ","", age, fixed=TRUE)),
+         stage = as.numeric(gsub("tnm.stage: ","", stage, fixed=TRUE)),
+         chemotherapy = gsub("chemotherapy.adjuvant: ","", chemotherapy, fixed=TRUE),
+         os.status = gsub("os.event: ","", os.status, fixed=TRUE),
+         os.time = gsub("os.delay (months): ","", os.time, fixed=TRUE),
+         KRAS = gsub("kras.mutation: ","", KRAS, fixed=TRUE)
+  )
+
+write.csv(s_data,"s_data.csv")
+```
+
+## Exploring the data
+
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+###----Exporting the data----
+library(readr)
+full_output <- cbind(fData(gse),exprs(gse))
+write.csv(full_output,"gse_full_output_GSE39582.csv")
+
+```
+
+## data restructure
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+features <- fData(gse)
+#View(features)
+### Look at the features data frame and decide the names of the columns you want to keep
+features <- dplyr::select(features, ID, `Gene Symbol`)
+features <- tidyr::separate(features,`Gene Symbol`, into = c("Symbol_1","Symbol_2"), sep=" /// ")
+
+full_output <- cbind(features,exprs(gse))
+
+##calculate the mean value of repeated genes
+full_output1 <-full_output[,2:588]
+full_output1<-full_output1[,-2]
+e_data<-full_output1
+expr_mean=aggregate(.~Symbol_1,mean,data=e_data)
+e_data<-expr_mean
+#write_csv(full_output, path="gse_full_output_GSE39582_selected.csv")
+### We can now join this to our expression matrix.
+#e_data <- exprs(gse) %>% 
+  #data.frame %>% 
+  #tibble::rownames_to_column("ID") %>% 
+  #left_join(features)
+
+e_data
+
+dim(s_data)
+dim(e_data)
+
+
+#final_output<-merge(s_data, e_data, by="geo_accession")
+#write.csv(final_output,"final_output.csv")
+
+##match with ferroptosis driver list
+driver<-read.csv("driver.csv",header = T, stringsAsFactors = T)
+
+driver_all<-e_data[e_data$Symbol_1 %in% driver$symbol,]
+
+driver_all <- driver_all %>% tidyr::gather(geo_accession, Expression,-Symbol_1,) %>% 
+  tidyr::spread(Symbol_1, Expression)
+driver_all
+
+#data_driver<- left_join(s_data, driver_all)
+data_driver<-merge(s_data,driver_all, by="geo_accession")
+colnames(data_driver)[9] <- 'KRAS'
+
+write.csv(data_driver,"clean_data_GSE39582_driver.csv")
+
+##match with ferroptosis suppressor list
+suppressor<-read.csv("suppressor.csv",header = T, stringsAsFactors = T)
+
+suppressor_all<-e_data[e_data$Symbol_1 %in% suppressor$symbol,]
+
+suppressor_all <- suppressor_all %>% tidyr::gather(geo_accession, Expression,-Symbol_1,) %>% 
+  tidyr::spread(Symbol_1, Expression)
+suppressor_all
+
+#data_suppressor<- left_join(s_data, suppressor_all)
+data_suppressor<- merge(s_data, suppressor_all,by="geo_accession")
+colnames(data_suppressor)[9] <- 'KRAS'
+
+write.csv(data_suppressor,"clean_data_GSE39582_suppressor.csv")
+
+##match with ferroptosis all list
+all<-read.csv("driver and suppressor.csv",header = T, stringsAsFactors = T)
+
+all_all<-e_data[e_data$Symbol_1 %in% all$symbol,]
+
+all_all <- all_all %>% tidyr::gather(geo_accession, Expression,-Symbol_1,) %>% 
+  tidyr::spread(Symbol_1, Expression)
+all_all
+
+
+
+#data_all<- left_join(s_data, all_all)
+data_all<- merge(s_data, all_all,by="geo_accession")
+colnames(data_all)[9] <- 'KRAS'
+write.csv(data_all,"clean_data_GSE39582_all.csv")
+
+
+
+### all data
+
+e_data <- e_data %>% tidyr::gather(geo_accession, Expression,-Symbol_1,) %>% 
+  tidyr::spread(Symbol_1, Expression)
+e_data
+
+#data<- left_join(s_data, e_data)
+data<- merge(s_data, e_data,by="geo_accession")
+colnames(data)[9] <- 'KRAS'
+write.csv(data,"clean_data_GSE39582.csv")
+```
+## machine learning female
+```{r random forest female all, message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+library(randomForestSRC)
+library(tidyverse)
+library(naniar)
+## drop NA in KRAS status
+#data %>% replace_with_na(replace = list(data = "N/A")) %>% is.na()
+female<-filter(data,sex=="Female")
+
+female<-female %>% replace_with_na_all(~.x == "N/A")## replace N/A to NA
+female_clean<-female %>% drop_na(KRAS)
+female_clean<-filter(female_clean,stage <="3")#,age>="50"
+
+write.csv(female_clean, "GSE39582_KRAS_without NA female.csv")
+
+
+
+##random forest model
+
+data_clean<-read.csv("GSE39582_KRAS_without NA female.csv",header = T, stringsAsFactors = T)
+
+f.obj <- rfsrc(KRAS ~ ., data  = as.data.frame(data_clean[,8:22890]))
+f.obj
+
+print(vimp(f.obj)$importance)
+
+# VIMP using brier prediction error
+print(vimp(f.obj, perf.type = "brier")$importance)
+
+oo <- subsample(f.obj, verbose = FALSE)
+# take a delete-d-jackknife procedure for example
+vimpCI <- extract.subsample(oo)$var.jk.sel.Z
+vimpCI
+
+write.csv(vimpCI,"vimpCI_female.csv")
+
+sig_female<-filter(vimpCI,signif=="TRUE")
+
+
+
+# Confidence Intervals for VIMP
+tiff(file="Confidence intervals_female.tiff",
+width=20, height=20, units="in", res=600)
+plot.subsample(oo1)
+dev.off()
+# Confidence Intervals for VIMP
+plot.subsample(oo)
+# take the variable "Month" for example for partial plot
+#plot.variable(f.obj, xvar.names = "", partial = TRUE)
+
+##Jackknife
+
+library(randomForestSRC)
+f.obj <- rfsrc(ï..name ~ ., data = data)
+## very small sample size so need largish subratio
+reg.smp.o <- subsample(f.obj, B = 25, bootstrap = TRUE)
+## summary of results
+print(reg.smp.o)
+```
+
+## machine learning male
+```{r random forest male all, message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+library(randomForestSRC)
+library(tidyverse)
+library(naniar)
+## drop NA in KRAS status
+#data %>% replace_with_na(replace = list(data = "N/A")) %>% is.na()
+male<-filter(data,sex=="Male")
+male<-male %>% replace_with_na_all(~.x == "N/A")## replace N/A to NA
+male_clean<-male %>% drop_na(KRAS)
+male_clean<-filter(male_clean,age>="50",stage <="3")
+
+write.csv(male_clean, "GSE39582_KRAS_without NA male.csv")
+
+
+
+##random forest model
+
+data_clean<-read.csv("GSE39582_KRAS_without NA male.csv",header = T, stringsAsFactors = T)
+
+f.obj <- rfsrc(KRAS ~ ., data  = as.data.frame(data_clean[,8:22890]))
+f.obj
+
+print(vimp(f.obj)$importance)
+
+# VIMP using brier prediction error
+print(vimp(f.obj, perf.type = "brier")$importance)
+
+oo <- subsample(f.obj, verbose = FALSE)
+# take a delete-d-jackknife procedure for example
+vimpCI <- extract.subsample(oo)$var.jk.sel.Z
+vimpCI
+
+write.csv(vimpCI,"vimpCI_male.csv")
+
+sig_male<-filter(vimpCI,signif=="TRUE")
+
+
+
+# Confidence Intervals for VIMP
+tiff(file="Confidence intervals_male.tiff",
+width=20, height=20, units="in", res=600)
+plot.subsample(oo1)
+dev.off()
+# Confidence Intervals for VIMP
+plot.subsample(oo)
+# take the variable "Month" for example for partial plot
+plot.variable(f.obj, xvar.names = "cystine", partial = TRUE)
+
+##Jackknife
+
+library(randomForestSRC)
+f.obj <- rfsrc(ï..name ~ ., data = data)
+## very small sample size so need largish subratio
+reg.smp.o <- subsample(f.obj, B = 25, bootstrap = TRUE)
+## summary of results
+print(reg.smp.o)
+```
+
+## driver model female
+```{r driver, message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+library(randomForestSRC)
+library(tidyverse)
+library(naniar)
+##filter female group from data_driver
+female_driver<-filter(data_driver,sex=="Female")
+
+female_driver<-female_driver %>% replace_with_na_all(~.x == "N/A")## replace N/A to NA
+
+female_driver_clean<-female_driver %>% drop_na(KRAS)
+female_driver_clean<-filter(female_driver_clean,age>="50",stage <="3")
+
+write.csv(female_driver_clean, "Female GSE39582_KRAS_without NA driver.csv")
+
+##random forest model
+
+female_driver_clean<-read.csv("Female GSE39582_KRAS_without NA driver.csv",header = T, stringsAsFactors = T)
+
+
+
+fdriver.obj <- rfsrc(KRAS ~ ., data = as.data.frame(female_driver_clean))
+fdriver.obj
+
+
+vimp_female_driver<-vimp(fdriver.obj)$importance
+
+# VIMP using brier prediction error
+print(vimp(fdriver.obj, perf.type = "brier")$importance)
+
+oo1 <- subsample(fdriver.obj, verbose = FALSE)
+# take a delete-d-jackknife procedure for example
+vimpCI1 <- extract.subsample(oo1)$var.jk.sel.Z
+vimpCI1
+
+write.csv(vimpCI1,"vimpCI_female_driver.csv")
+
+sig_female<-filter(vimpCI1,signif=="TRUE")
+
+
+
+# Confidence Intervals for VIMP
+tiff(file="Confidence intervals_female_driver.tiff",
+width=20, height=20, units="in", res=600)
+plot.subsample(oo1)
+dev.off()
+# take the variable "Month" for example for partial plot
+plot.variable(fdriver.obj, xvar.names = "ABCC1", partial = TRUE)
+
+##Jackknife
+
+library(randomForestSRC)
+iris.obj <- rfsrc(KRAS ~ ., data = female_driver_clean)
+## very small sample size so need largish subratio
+reg.smp.o <- subsample(iris.obj, B = 25, subratio = .5)
+## summary of results
+print(reg.smp.o)
+
+
+```
+
+
+## driver model male
+```{r male driver model, message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+##filter female group from data_driver
+male_driver<-filter(data_driver,sex=="Male")
+
+male_driver<-male_driver %>% replace_with_na_all(~.x == "N/A")## replace N/A to NA
+male_driver_clean<-male_driver %>% drop_na(KRAS)
+male_driver_clean<-filter(male_driver_clean,age>="50",stage <="3")
+
+write.csv(male_driver_clean, "male GSE39582_KRAS_without NA driver.csv")
+
+##random forest model
+
+male_driver_clean<-read.csv("male GSE39582_KRAS_without NA driver.csv",header = T, stringsAsFactors = T)
+
+
+mdriver.obj <- rfsrc(KRAS ~ ., data = as.data.frame(male_driver_clean))
+mdriver.obj
+
+
+vimp_male_driver<-vimp(mdriver.obj)$importance
+
+# VIMP using brier prediction error
+print(vimp(mdriver.obj, perf.type = "brier")$importance)
+
+oo2 <- subsample(mdriver.obj, verbose = FALSE)
+# take a delete-d-jackknife procedure for example
+vimpCI2 <- extract.subsample(oo2)$var.jk.sel.Z
+vimpCI2
+
+write.csv(vimpCI2,"vimpCI_male_driver.csv")
+
+sig_male<-filter(vimpCI2,signif=="TRUE")
+
+# Confidence Intervals for VIMP
+tiff(file="Confidence intervals_male_driver.tiff",
+width=20, height=20, units="in", res=600)
+plot.subsample(oo2)
+dev.off()
+# take the variable "Month" for example for partial plot
+#plot.variable(mdriver.obj, xvar.names = "X208788_at", partial = TRUE)
+
+##Jackknife
+
+# library(randomForestSRC)
+# iris.obj <- rfsrc(KRAS ~ ., data = male_driver_clean)
+# ## very small sample size so need largish subratio
+# reg.smp.o <- subsample(iris.obj, B = 25, subratio = .5)
+# ## summary of results
+# print(reg.smp.o)
+```
+
+## Matched with full_output with gene symbol
+```{r matched gene ID, echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+male_vimp<-read.csv("vimpCI_male_driver.csv",header = T, stringsAsFactors = T)
+
+#delete X in the ID column before matching\
+
+male_vimp <- male_vimp %>% 
+  mutate(X = gsub("X", "", X, fixed=TRUE))
+
+##matching with full_output
+male_genelist<-full_output[full_output$ID %in% male_vimp$X,]
+
+write.csv(male_genelist,"sig_male_genelist.csv")
+
+##female group
+female_vimp<-read.csv("vimpCI_female_driver.csv",header = T, stringsAsFactors = T)
+
+#delete X in the ID column before matching\
+
+female_vimp <- female_vimp %>% 
+  mutate(X = gsub("X", "", X, fixed=TRUE))
+
+##matching with full_output
+female_genelist<-full_output[full_output$ID %in% female_vimp$X,]
+
+write.csv(female_genelist,"sig_female_genelist.csv")
+```
+
+# suppressor
+
+## suppressor model female
+```{r suppressor, message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+library(randomForestSRC)
+library(tidyverse)
+library(naniar)
+##filter female group from data_suppressor
+female_suppressor<-filter(data_suppressor,sex=="Female")
+
+female_suppressor<-female_suppressor %>% replace_with_na_all(~.x == "N/A")## replace N/A to NA
+female_suppressor_clean<-female_suppressor %>% drop_na(KRAS)
+female_suppressor_clean<-filter(female_suppressor_clean,age>="50",stage <="3")
+
+write.csv(female_suppressor_clean, "Female GSE39582_KRAS_without NA suppressor.csv")
+
+##random forest model
+
+female_suppressor_clean<-read.csv("Female GSE39582_KRAS_without NA suppressor.csv",header = T, stringsAsFactors = T)
+
+fsuppressor.obj <- rfsrc(KRAS ~ ., data = as.data.frame(female_suppressor_clean))
+fsuppressor.obj
+
+
+vimp_female_suppressor<-vimp(fsuppressor.obj)$importance
+
+# VIMP using brier prediction error
+print(vimp(fsuppressor.obj, perf.type = "brier")$importance)
+
+oo3 <- subsample(fsuppressor.obj, verbose = FALSE)
+# take a delete-d-jackknife procedure for example
+vimpCI3 <- extract.subsample(oo3)$var.jk.sel.Z
+vimpCI3
+
+write.csv(vimpCI3,"vimpCI_female_suppressor.csv")
+
+sig_female<-filter(vimpCI3,signif=="TRUE")
+
+
+
+# Confidence Intervals for VIMP
+tiff(file="Confidence intervals_female_suppressor.tiff",
+width=20, height=20, units="in", res=600)
+plot.subsample(oo3)
+dev.off()
+
+# take the variable "Month" for example for partial plot
+#plot.variable(fsuppressor.obj, xvar.names = "X1552873_s_at", partial = TRUE)
+
+##Jackknife
+
+# library(randomForestSRC)
+# iris.obj <- rfsrc(KRAS ~ ., data = female_suppressor_clean)
+# ## very small sample size so need largish subratio
+# reg.smp.o <- subsample(iris.obj, B = 25, subratio = .5)
+# ## summary of results
+# print(reg.smp.o)
+
+
+```
+
+
+## suppressor model male
+```{r male suppressor model, message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+##filter female group from data_suppressor
+male_suppressor<-filter(data_suppressor,sex=="Male")
+
+male_suppressor<-male_suppressor %>% replace_with_na_all(~.x == "N/A")## replace N/A to NA
+male_suppressor_clean<-male_suppressor %>% drop_na(KRAS)
+male_suppressor_clean<-filter(male_suppressor_clean,age>="50",stage <="3")
+
+write.csv(male_suppressor_clean, "male GSE39582_KRAS_without NA suppressor.csv")
+
+##random forest model
+
+male_suppressor_clean<-read.csv("male GSE39582_KRAS_without NA suppressor.csv",header = T, stringsAsFactors = T)
+
+
+msuppressor.obj <- rfsrc(KRAS ~ ., data = as.data.frame(male_suppressor_clean))
+msuppressor.obj
+
+
+vimp_male_suppressor<-vimp(msuppressor.obj)$importance
+
+# VIMP using brier prediction error
+print(vimp(msuppressor.obj, perf.type = "brier")$importance)
+
+oo4 <- subsample(msuppressor.obj, verbose = FALSE)
+# take a delete-d-jackknife procedure for example
+vimpCI4 <- extract.subsample(oo4)$var.jk.sel.Z
+vimpCI4
+
+write.csv(vimpCI4,"vimpCI_male_suppressor.csv")
+
+sig_male<-filter(vimpCI4,signif=="TRUE")
+
+# Confidence Intervals for VIMP
+tiff(file="Confidence intervals_male_suppressor.tiff",
+width=20, height=20, units="in", res=600)
+plot.subsample(oo4)
+dev.off()
+# take the variable "Month" for example for partial plot
+#plot.variable(msuppressor.obj, xvar.names = "X208788_at", partial = TRUE)
+
+##Jackknife
+
+# library(randomForestSRC)
+# iris.obj <- rfsrc(KRAS ~ ., data = male_suppressor_clean)
+# ## very small sample size so need largish subratio
+# reg.smp.o <- subsample(iris.obj, B = 25, subratio = .5)
+# ## summary of results
+# print(reg.smp.o)
+```
+## Matched with full_output with gene symbol
+```{r matched gene ID, echo=TRUE, message=TRUE, warning=TRUE, paged.print=TRUE}
+male_vimp<-read.csv("vimpCI_male_suppressor.csv",header = T, stringsAsFactors = T)
+
+#delete X in the ID column before matching\
+
+male_vimp <- male_vimp %>% 
+  mutate(X = gsub("X", "", X, fixed=TRUE))
+
+##matching with full_output
+male_genelist<-full_output[full_output$ID %in% male_vimp$X,]
+
+write.csv(male_genelist,"sig_male_genelist_suppressor.csv")
+
+##female group
+female_vimp<-read.csv("vimpCI_female_suppressor.csv",header = T, stringsAsFactors = T)
+
+#delete X in the ID column before matching\
+
+female_vimp <- female_vimp %>% 
+  mutate(X = gsub("X", "", X, fixed=TRUE))
+
+##matching with full_output
+female_genelist<-full_output[full_output$ID %in% female_vimp$X,]
+
+write.csv(female_genelist,"sig_female_genelist_suppressor.csv")
+```
+
+# all
+
+## all model female
+```{r all, message=TRUE, warning=TRUE, include=FALSE}
+library(randomForestSRC)
+library(tidyverse)
+library(naniar)
+##filter female group from data_all
+female_all<-filter(data_all,sex=="Female",stage <="3")#age>="50"
+
+female_all<-female_all %>% replace_with_na_all(~.x == "N/A")## replace N/A to NA
+female_all_clean<-female_all %>% drop_na(KRAS)
+
+write.csv(female_all_clean, "Female GSE39582_KRAS_without NA all.csv")
+
+##random forest model
+
+female_all_clean<-read.csv("Female GSE39582_KRAS_without NA all_clean_0803.csv",header = T, stringsAsFactors = T)
+
+fall.obj <- rfsrc(KRAS ~ ., data = as.data.frame(female_all_clean))
+fall.obj
+
+
+vimp_female_all<-vimp(fall.obj)$importance
+
+# VIMP using brier prediction error
+print(vimp(fall.obj, perf.type = "brier")$importance)
+
+oo5 <- subsample(fall.obj, verbose = FALSE)
+# take a delete-d-jackknife procedure for example
+vimpCI5 <- extract.subsample(oo5)$var.jk.sel.Z
+vimpCI5
+
+write.csv(vimpCI5,"vimpCI_female_all.csv")
+
+sig_female<-filter(vimpCI5,signif=="TRUE")
+
+
+
+# Confidence Intervals for VIMP
+tiff(file="Confidence intervals_female_all.tiff",
+width=20, height=20, units="in", res=600)
+plot.subsample(oo5)
+dev.off()
+
+# take the variable "Month" for example for partial plot
+#plot.variable(fall.obj, xvar.names = "X1552873_s_at", partial = TRUE)
+
+##Jackknife
+
+# library(randomForestSRC)
+# iris.obj <- rfsrc(KRAS ~ ., data = female_all_clean)
+# ## very small sample size so need largish subratio
+# reg.smp.o <- subsample(iris.obj, B = 25, subratio = .5)
+# ## summary of results
+# print(reg.smp.o)
+
+
+```
+
+
+## all model male
+```{r male all model, echo=FALSE, message=TRUE, warning=TRUE, paged.print=TRUE}
+##filter female group from data_all
+male_all<-filter(data_all,sex=="Male",stage<="3")#age>="50"
+
+male_all<-male_all %>% replace_with_na_all(~.x == "N/A")## replace N/A to NA
+male_all_clean<-male_all %>% drop_na(KRAS)
+
+write.csv(male_all_clean, "male GSE39582_KRAS_without NA all.csv")
+
+##random forest model
+
+male_all_clean<-read.csv("male GSE39582_KRAS_without NA all_clean_0803.csv",header = T, stringsAsFactors = T)
+
+
+mall.obj <- rfsrc(KRAS ~ ., data = as.data.frame(male_all_clean))
+mall.obj
+
+
+vimp_male_all<-vimp(mall.obj)$importance
+
+# VIMP using brier prediction error
+print(vimp(mall.obj, perf.type = "brier")$importance)
+
+oo6 <- subsample(mall.obj, verbose = FALSE)
+# take a delete-d-jackknife procedure for example
+vimpCI6 <- extract.subsample(oo6)$var.jk.sel.Z
+vimpCI6
+
+write.csv(vimpCI6,"vimpCI_male_all.csv")
+
+sig_male<-filter(vimpCI6,signif=="TRUE")
+
+# Confidence Intervals for VIMP
+tiff(file="Confidence intervals_male_all.tiff",
+width=20, height=20, units="in", res=600)
+plot.subsample(oo6)
+dev.off()
+# take the variable "Month" for example for partial plot
+#plot.variable(mall.obj, xvar.names = "X208788_at", partial = TRUE)
+
+##Jackknife
+
+# library(randomForestSRC)
+# iris.obj <- rfsrc(KRAS ~ ., data = male_all_clean)
+# ## very small sample size so need largish subratio
+# reg.smp.o <- subsample(iris.obj, B = 25, subratio = .5)
+# ## summary of results
+# print(reg.smp.o)
+# ```
+## Matched with full_output with gene symbol
+```
+
+## matched all
+```{r matched al, echo=FALSE, message=FALSE, warning=FALSE, paged.print=FALSE}
+male_vimp<-read.csv("vimpCI_male_all.csv",header = T, stringsAsFactors = T)
+
+#delete X in the ID column before matching\
+
+male_vimp <- male_vimp %>% 
+  mutate(X = gsub("X", "", X, fixed=TRUE))
+
+##matching with full_output
+male_genelist<-full_output[full_output$ID %in% male_vimp$X,]
+
+write.csv(male_genelist,"sig_male_genelist_all.csv")
+
+##female group
+female_vimp<-read.csv("vimpCI_female_all.csv",header = T, stringsAsFactors = T)
+
+#delete X in the ID column before matching\
+
+female_vimp <- female_vimp %>% 
+  mutate(X = gsub("X", "", X, fixed=TRUE))
+
+##matching with full_output
+female_genelist<-full_output[full_output$ID %in% female_vimp$X,]
+
+write.csv(female_genelist,"sig_female_genelist_all.csv")
+```
+
+
+
+# Survival
+```{r female survival, echo=TRUE, message=TRUE, warning=TRUE, paged.print=TRUE}
+male_all<-filter(data_all,sex=="Male",age>="55",stage<="3")
+
+data<-data %>% replace_with_na_all(~.x == "N/A")## replace N/A to NA
+data_clean<-data %>% drop_na(KRAS)
+
+write.csv(data_clean, "GSE39582_KRAS_without NA.csv")
+
+library(randomForestSRC)
+data(peakVO2, package = "randomForestSRC")
+dta <- peakVO2
+obj <- rfsrc(Surv(ttodead,died)~., dta,
+             ntree = 1000, nodesize = 5, nsplit = 50, importance = TRUE)
+print(obj)
+
+```
+

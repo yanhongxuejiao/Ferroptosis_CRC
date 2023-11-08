@@ -1,0 +1,574 @@
+---
+title: "COAD"
+author: "Snow Yan"
+date: "1/16/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r import file}
+getwd()
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+library(dplyr)
+data<-read.csv("TCGA-COADREAD_123_mRNA_log2_without_KRAS_unknown.csv",stringsAsFactors = T, header = T)
+
+data <- data %>% 
+  dplyr::rename(ID =PATIENT_ID,
+                Sex = SEX,
+                Age = AGE,
+                Stage = STAGE,
+                os.status = OS_STATUS,
+                os.time = OS_MONTHS,
+                Kras = KRAS_mut
+)
+data<-data%>% 
+  mutate(Kras=gsub("0: WT", "WT", Kras, fixed=TRUE),
+         Kras=gsub("1: Mutant", "MT", Kras, fixed=TRUE))
+
+data1<-t(data)
+write.csv(data1,"coadread.ferr.50.data.csv")
+
+
+s_data <- data%>% 
+  dplyr::select(ID, Sex, Age, Stage,os.status, os.time, Kras)
+s_data<-as.data.frame.matrix(s_data)
+
+
+
+as.data.frame.numeric(s_data$Age)
+
+write.csv(s_data,"s_data.csv")
+
+#s_data<-read.csv("s_data.csv",stringsAsFactors = T,header = T)
+```
+
+```{r data clean, message=FALSE, warning=FALSE, include=FALSE}
+e_data<-read.csv("coadread.ferr.50.data.csv",stringsAsFactors = T, header = T)
+colnames(e_data)[1] <- 'Symbol_1'
+
+##match with ferroptosis driver list
+driver<-read.csv("driver.csv",header = T, stringsAsFactors = T)
+
+driver_all<-e_data[e_data$Symbol_1 %in% driver$symbol,]
+
+driver_all <- driver_all %>% tidyr::gather(ID, Expression,-Symbol_1,) %>% 
+  tidyr::spread(Symbol_1, Expression)
+
+driver_all<-driver_all %>% 
+  mutate(ID = gsub(".", "-", ID, fixed=TRUE))
+
+data_driver<- left_join(s_data, driver_all)
+
+write.csv(data_driver,"clean_data_COAD_driver.csv")
+
+##match with ferroptosis suppressor list
+suppressor<-read.csv("suppressor.csv",header = T, stringsAsFactors = T)
+
+suppressor_all<-e_data[e_data$Symbol_1 %in% suppressor$symbol,]
+
+suppressor_all <- suppressor_all %>% tidyr::gather(ID, Expression,-Symbol_1,) %>% 
+  tidyr::spread(Symbol_1, Expression)
+
+suppressor_all<-suppressor_all %>% 
+  mutate(ID = gsub(".", "-", ID, fixed=TRUE))
+
+data_suppressor<- left_join(s_data, suppressor_all)
+
+write.csv(data_suppressor,"clean_data_COAD_suppressor.csv")
+
+##match with ferroptosis all list
+all<-read.csv("driver and suppressor.csv",header = T, stringsAsFactors = T)
+
+all_all<-e_data[e_data$Symbol_1 %in% all$symbol,]
+
+all_all <- all_all %>% tidyr::gather(ID, Expression,-Symbol_1,) %>% 
+  tidyr::spread(Symbol_1, Expression)
+
+all_all<-all_all %>% 
+  mutate(ID = gsub(".", "-", ID, fixed=TRUE))
+
+data_all<- left_join(s_data, all_all)
+
+write.csv(data_all,"clean_data_COAD_all.csv")
+
+```
+## driver model female
+```{r driver, message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+library(randomForestSRC)
+library(tidyverse)
+library(naniar)
+##filter female group from data_driver
+female_driver<-filter(data_driver,Sex=="Female")
+
+#female_driver<-female_driver %>% replace_with_na_all(~.x == "N/A")## replace N/A to NA
+#female_driver_clean<-female_driver %>% drop_na(KRAS)
+
+#female_driver_clean <-  subset(female_driver,Stage !="IV", Stage !="IVB")
+#female_driver_clean <-  subset(female_driver_clean,Stage !="IVA")
+#female_driver_clean <-  subset(female_driver_clean, Age >=55)
+
+write.csv(female_driver, "Female COAD_KRAS_driver.csv")
+
+##random forest model
+
+female_driver_clean<-read.csv("Female COAD_KRAS_driver_clean.csv",header = T, stringsAsFactors = T)
+
+fdriver.obj <- rfsrc(Kras ~ ., data = as.data.frame(female_driver_clean))
+fdriver.obj
+
+
+vimp_female_driver<-vimp(fdriver.obj)$importance
+
+# VIMP using brier prediction error
+#print(vimp(fdriver.obj, perf.type = "brier")$importance)
+
+oo1 <- subsample(fdriver.obj, verbose = FALSE)
+# take a delete-d-jackknife procedure for example
+vimpCI1 <- extract.subsample(oo1)$var.jk.sel.Z
+vimpCI1
+
+write.csv(vimpCI1,"vimpCI_female_driver.csv")
+
+sig_female<-filter(vimpCI1,signif=="TRUE")
+
+
+
+# Confidence Intervals for VIMP
+tiff(file="Confidence intervals_female_driver.tiff",
+width=20, height=20, units="in", res=600)
+plot.subsample(oo1)
+dev.off()
+# take the variable "Month" for example for partial plot
+plot.variable(fdriver.obj, xvar.names = "ALOX12", partial = TRUE)
+
+##Jackknife
+
+library(randomForestSRC)
+iris.obj <- rfsrc(KRAS ~ ., data = female_driver_clean)
+## very small sample size so need largish subratio
+reg.smp.o <- subsample(iris.obj, B = 25, subratio = .5)
+## summary of results
+print(reg.smp.o)
+
+
+```
+
+
+## driver model male
+```{r driver, message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+library(randomForestSRC)
+library(tidyverse)
+library(naniar)
+##filter male group from data_driver
+male_driver<-filter(data_driver,Sex=="Male")
+
+#male_driver<-male_driver %>% replace_with_na_all(~.x == "N/A")## replace N/A to NA
+male_driver_clean<-male_driver %>% drop_na(os.time)
+
+#male_driver_clean <-  subset(male_driver,Stage !="IV", Stage !="IVB")
+#male_driver_clean <-  subset(male_driver_clean,Stage !="IVA")
+#male_driver_clean<-   filter(male_driver_clean,Age>="55")
+
+write.csv(male_driver_clean, "male COAD_KRAS_driver.csv")
+
+##random forest model
+
+male_driver_clean<-read.csv("male COAD_KRAS_driver_clean.csv",header = T, stringsAsFactors = T)
+
+mdriver.obj <- rfsrc(Kras ~ ., data = as.data.frame(male_driver_clean))
+mdriver.obj
+
+
+vimp_male_driver<-vimp(fdriver.obj)$importance
+
+# VIMP using brier prediction error
+#print(vimp(mdriver.obj, perf.type = "brier")$importance)
+
+oo2 <- subsample(mdriver.obj, verbose = FALSE)
+# take a delete-d-jackknife procedure for example
+vimpCI2 <- extract.subsample(oo2)$var.jk.sel.Z
+vimpCI2
+
+write.csv(vimpCI2,"vimpCI_male_driver.csv")
+
+sig_male<-filter(vimpCI2,signif=="TRUE")
+
+
+
+# Confidence Intervals for VIMP
+tiff(file="Confidence intervals_male_driver.tiff",
+width=20, height=20, units="in", res=600)
+plot.subsample(oo2)
+dev.off()
+# take the variable "Month" for example for partial plot
+plot.variable(mdriver.obj, xvar.names = "ALOX12", partial = TRUE)
+
+##Jackknife
+
+library(randomForestSRC)
+iris.obj <- rfsrc(KRAS ~ ., data = male_driver_clean)
+## very small sample size so need largish subratio
+reg.smp.o <- subsample(iris.obj, B = 25, subratio = .5)
+## summary of results
+print(reg.smp.o)
+
+
+```
+# suppressor
+
+## suppressor model female
+```{r suppressor, message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+library(randomForestSRC)
+library(tidyverse)
+library(naniar)
+##filter female group from data_suppressor
+female_suppressor<-filter(data_suppressor,Sex=="Female")
+
+write.csv(female_suppressor, "Female COAD_KRAS_suppressor.csv")
+
+##random forest model
+
+female_suppressor_clean<-read.csv("Female COAD_KRAS_suppressor_clean.csv",header = T, stringsAsFactors = T)
+
+fsuppressor.obj <- rfsrc(Kras ~ ., data = as.data.frame(female_suppressor_clean))
+fsuppressor.obj
+
+
+vimp_female_suppressor<-vimp(fsuppressor.obj)$importance
+
+# VIMP using brier prediction error
+#print(vimp(fsuppressor.obj, perf.type = "brier")$importance)
+
+oo3 <- subsample(fsuppressor.obj, verbose = FALSE)
+# take a delete-d-jackknife procedure for example
+vimpCI3 <- extract.subsample(oo3)$var.jk.sel.Z
+vimpCI3
+
+write.csv(vimpCI3,"vimpCI_female_suppressor.csv")
+
+sig_female<-filter(vimpCI3,signif=="TRUE")
+
+
+
+# Confidence Intervals for VIMP
+tiff(file="Confidence intervals_female_suppressor.tiff",
+width=20, height=20, units="in", res=600)
+plot.subsample(oo3)
+dev.off()
+
+
+
+```
+
+
+## suppressor model male
+```{r male suppressor model, message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+##filter female group from data_suppressor
+male_suppressor<-filter(data_suppressor,Sex=="Male")
+
+write.csv(male_suppressor, "male COAD_KRAS_suppressor.csv")
+
+##random forest model
+
+male_suppressor_clean<-read.csv("male COAD_KRAS_suppressor_clean.csv",header = T, stringsAsFactors = T)
+
+
+msuppressor.obj <- rfsrc(Kras ~ ., data = as.data.frame(male_suppressor_clean))
+msuppressor.obj
+
+
+vimp_male_suppressor<-vimp(msuppressor.obj)$importance
+
+# VIMP using brier prediction error
+#print(vimp(msuppressor.obj, perf.type = "brier")$importance)
+
+oo4 <- subsample(msuppressor.obj, verbose = FALSE)
+# take a delete-d-jackknife procedure for example
+vimpCI4 <- extract.subsample(oo4)$var.jk.sel.Z
+vimpCI4
+
+write.csv(vimpCI4,"vimpCI_male_suppressor.csv")
+
+sig_male<-filter(vimpCI4,signif=="TRUE")
+
+# Confidence Intervals for VIMP
+tiff(file="Confidence intervals_male_suppressor.tiff",
+width=20, height=20, units="in", res=600)
+plot.subsample(oo4)
+dev.off()
+# take the variable "Month" for example for partial plot
+#plot.variable(msuppressor.obj, xvar.names = "X208788_at", partial = TRUE)
+
+##Jackknife
+
+# library(randomForestSRC)
+# iris.obj <- rfsrc(KRAS ~ ., data = male_suppressor_clean)
+# ## very small sample size so need largish subratio
+# reg.smp.o <- subsample(iris.obj, B = 25, subratio = .5)
+# ## summary of results
+# print(reg.smp.o)
+```
+
+# all
+
+## all model female
+```{r all, message=FALSE, warning=FALSE, include=FALSE}
+library(randomForestSRC)
+library(tidyverse)
+library(naniar)
+##filter female group from data_all
+female_all<-filter(data_all,Sex=="Female")
+
+write.csv(female_all, "Female COADREAD50_KRAS_without NA all.csv")
+
+##random forest model
+
+female_all_clean<-read.csv("Female COADREAD50_KRAS_without NA all_clean.csv",header = T, stringsAsFactors = T)
+
+fall.obj <- rfsrc(Kras ~ ., data = as.data.frame(female_all_clean))
+fall.obj
+
+
+vimp_female_all<-vimp(fall.obj)$importance
+
+# VIMP using brier prediction error
+#print(vimp(fall.obj, perf.type = "brier")$importance)
+
+oo5 <- subsample(fall.obj, verbose = FALSE)
+# take a delete-d-jackknife procedure for example
+vimpCI5 <- extract.subsample(oo5)$var.jk.sel.Z
+vimpCI5
+
+write.csv(vimpCI5,"vimpCI_female_all.csv")
+
+sig_female<-filter(vimpCI5,signif=="TRUE")
+
+
+
+# Confidence Intervals for VIMP
+tiff(file="Confidence intervals_female_all.tiff",
+width=20, height=20, units="in", res=600)
+plot.subsample(oo5)
+dev.off()
+
+# take the variable "Month" for example for partial plot
+#plot.variable(fall.obj, xvar.names = "X1552873_s_at", partial = TRUE)
+
+##Jackknife
+
+# library(randomForestSRC)
+# iris.obj <- rfsrc(KRAS ~ ., data = female_all_clean)
+# ## very small sample size so need largish subratio
+# reg.smp.o <- subsample(iris.obj, B = 25, subratio = .5)
+# ## summary of results
+# print(reg.smp.o)
+
+
+```
+
+
+## all model male
+```{r male all model, message=TRUE, warning=TRUE, include=FALSE, paged.print=TRUE}
+##filter female group from data_all
+male_all<-filter(data_all,Sex=="Male")
+
+male_all<-male_all %>% drop_na(os.time)
+
+write.csv(male_all, "male COADREAD50_KRAS_without NA all.csv")
+
+##random forest model
+
+male_all_clean<-read.csv("male COADREAD50_KRAS_without NA all_clean.csv",header = T, stringsAsFactors = T)
+
+
+mall.obj <- rfsrc(Kras ~ ., data = as.data.frame(male_all_clean))
+mall.obj
+
+
+vimp_male_all<-vimp(mall.obj)$importance
+
+# VIMP using brier prediction error
+#print(vimp(mall.obj, perf.type = "brier")$importance)
+
+oo6 <- subsample(mall.obj, verbose = FALSE)
+# take a delete-d-jackknife procedure for example
+vimpCI6 <- extract.subsample(oo6)$var.jk.sel.Z
+vimpCI6
+
+write.csv(vimpCI6,"vimpCI_male_all.csv")
+
+sig_male<-filter(vimpCI6,signif=="TRUE")
+
+# Confidence Intervals for VIMP
+tiff(file="Confidence intervals_male_all.tiff",
+width=20, height=20, units="in", res=600)
+plot.subsample(oo6)
+dev.off()
+
+```
+
+## driver model KRAS independent of sex
+```{r driver, echo=FALSE, message=FALSE, warning=FALSE, paged.print=FALSE}
+library(randomForestSRC)
+library(tidyverse)
+library(naniar)
+##filter female group from data_driver
+driver_KRAS<-filter(data_driver,Stage !="IV", Stage !="IVB")
+
+driver_KRAS<-filter(driver_KRAS,Stage !="IV", Stage !="IVB")
+
+write.csv(driver_KRAS, "COAD_KRAS_without NA driver.csv")
+
+##random forest model
+
+driver_KRAS_clean<-read.csv("COAD_KRAS_without NA driver_clean.csv",header = T, stringsAsFactors = T)
+
+fdriver.obj <- rfsrc(KRAS ~ ., data = as.data.frame(driver_KRAS_clean))
+fdriver.obj
+
+
+vimp_driver_KRAS<-vimp(fdriver.obj)$importance
+
+# VIMP using brier prediction error
+#print(vimp(fdriver.obj, perf.type = "brier")$importance)
+
+oo1 <- subsample(fdriver.obj, verbose = FALSE)
+# take a delete-d-jackknife procedure for example
+vimpCI1 <- extract.subsample(oo1)$var.jk.sel.Z
+vimpCI1
+
+write.csv(vimpCI1,"vimpCI_driver_KRAS.csv")
+
+sig_female<-filter(vimpCI1,signif=="TRUE")
+
+
+
+# Confidence Intervals for VIMP
+tiff(file="Confidence intervals_driver_KRAS.tiff",
+width=20, height=20, units="in", res=600)
+plot.subsample(oo1)
+dev.off()
+# take the variable "Month" for example for partial plot
+plot.variable(fdriver.obj, xvar.names = "ALOX12", partial = TRUE)
+
+##Jackknife
+
+library(randomForestSRC)
+iris.obj <- rfsrc(KRAS ~ ., data = driver_KRAS_clean)
+## very small sample size so need largish subratio
+reg.smp.o <- subsample(iris.obj, B = 25, subratio = .5)
+## summary of results
+print(reg.smp.o)
+
+
+```
+
+## suppressor model KRAS independent of sex
+```{r suppressor, echo=FALSE, message=FALSE, warning=FALSE, paged.print=FALSE}
+library(randomForestSRC)
+library(tidyverse)
+library(naniar)
+##filter female group from data_suppressor
+suppressor_KRAS<-filter(data_suppressor,Stage !="IV", Stage !="IVB")
+suppressor_KRAS<-filter(suppressor_KRAS,Age>=55)
+
+write.csv(suppressor_KRAS, "COAD_KRAS_without NA suppressor.csv")
+
+##random forest model
+
+suppressor_KRAS_clean<-read.csv("COAD_KRAS_without NA suppressor_clean.csv",header = T, stringsAsFactors = T)
+
+fsuppressor.obj <- rfsrc(KRAS ~ ., data = as.data.frame(suppressor_KRAS_clean))
+fsuppressor.obj
+
+
+vimp_suppressor_KRAS<-vimp(fsuppressor.obj)$importance
+
+# VIMP using brier prediction error
+#print(vimp(fsuppressor.obj, perf.type = "brier")$importance)
+
+oo1 <- subsample(fsuppressor.obj, verbose = FALSE)
+# take a delete-d-jackknife procedure for example
+vimpCI1 <- extract.subsample(oo1)$var.jk.sel.Z
+vimpCI1
+
+write.csv(vimpCI1,"vimpCI_suppressor_KRAS.csv")
+
+sig_female<-filter(vimpCI1,signif=="TRUE")
+
+
+
+# Confidence Intervals for VIMP
+tiff(file="Confidence intervals_suppressor_KRAS.tiff",
+width=20, height=20, units="in", res=600)
+plot.subsample(oo1)
+dev.off()
+# take the variable "Month" for example for partial plot
+plot.variable(fsuppressor.obj, xvar.names = "ALOX12", partial = TRUE)
+
+##Jackknife
+
+library(randomForestSRC)
+iris.obj <- rfsrc(KRAS ~ ., data = suppressor_KRAS_clean)
+## very small sample size so need largish subratio
+reg.smp.o <- subsample(iris.obj, B = 25, subratio = .5)
+## summary of results
+print(reg.smp.o)
+
+
+```
+
+
+## all model KRAS
+```{r KRAS all model, message=TRUE, warning=TRUE, include=FALSE, paged.print=TRUE}
+##filter feKRAS group from data_all
+KRAS_all<-filter(data_all,Stage!="IV", Stage!="IVB")
+KRAS_all<-filter(KRAS_all,Age>=55)
+write.csv(KRAS_all, "KRAS COAD_KRAS_without NA all.csv")
+
+##random forest model
+
+KRAS_all_clean<-read.csv("KRAS COAD_KRAS_without NA all_clean.csv",header = T, stringsAsFactors = T)
+
+
+mall.obj <- rfsrc(KRAS ~ ., data = as.data.frame(KRAS_all_clean))
+mall.obj
+
+
+vimp_KRAS_all<-vimp(mall.obj)$importance
+
+# VIMP using brier prediction error
+print(vimp(mall.obj, perf.type = "brier")$importance)
+
+oo6 <- subsample(mall.obj, verbose = FALSE)
+# take a delete-d-jackknife procedure for example
+vimpCI6 <- extract.subsample(oo6)$var.jk.sel.Z
+vimpCI6
+
+write.csv(vimpCI6,"vimpCI_KRAS_all.csv")
+
+sig_KRAS<-filter(vimpCI6,signif=="TRUE")
+
+# Confidence Intervals for VIMP
+tiff(file="Confidence intervals_KRAS_all.tiff",
+width=20, height=20, units="in", res=600)
+plot.subsample(oo4)
+dev.off()
+
+```
+
