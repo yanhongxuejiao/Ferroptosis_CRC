@@ -1,0 +1,373 @@
+---
+title: "RSF plots"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load libraries
+```{r}
+library(dplyr)
+library(survival)
+library(survminer)
+library(randomForestSRC)
+library(ggRandomForests)
+library(ggplot2)
+library(parallel)
+```
+
+# Load datasets
+```{r}
+setwd("C:/Users/sxy03/Research/ferr") 
+source("RSFBE_boot.R")
+source("partialplot.R")
+############GSE39582############GSE39582############GSE39582############GSE39582
+geo <- read.csv("GSE39582_log2_all_age_stage123.csv")
+rownames(geo) <- geo$geo_accession
+############TCGA############TCGA############TCGA############TCGA############TCGA
+tcga123 <- read.csv("TCGA-COADREAD_123_mRNA_log2_Surv.csv")
+rownames(tcga123) <- tcga123$PATIENT_ID
+tcga123$stage<-ifelse(tcga123$STAGE == "STAGE I"|tcga123$STAGE== "STAGE II", 'early', 'late')
+tcga123 <- tcga123 %>%
+  mutate(stage = case_when(
+    STAGE == "STAGE I" ~ "early",
+    STAGE == "STAGE II" ~ "early",
+    STAGE == "STAGE III" ~ "late"
+  ))
+```
+
+# Load RSF results
+```{r}
+##### By sex#####
+aggregateRanks_Male_OS <- read.csv("aggregateRanks_Male_OS.csv")
+aggregateRanks_Female_OS <- read.csv("aggregateRanks_Female_OS.csv")
+aggregateRanks_Male_PFS <- read.csv("aggregateRanks_Male_PFS.csv")
+aggregateRanks_Female_PFS <- read.csv("aggregateRanks_Female_PFS.csv")
+Male_OS<-subset(aggregateRanks_Male_OS,Score<0.05)$Name
+Female_OS<-subset(aggregateRanks_Female_OS,Score<0.05)$Name
+Male_PFS<-subset(aggregateRanks_Male_PFS,Score<0.05)$Name
+Female_PFS<-subset(aggregateRanks_Female_PFS,Score<0.05)$Name
+# Reduce(intersect,OS)#"GLS2"
+# Reduce(intersect,PFS)#"CISD2" "ATF3" 
+os <-list("Male_OS"=Male_OS,"Female_OS"=Female_OS)
+##### By sex & KRAS #####
+aggregateRanks_Male_MT_OS <- read.csv("aggregateRanks_Male_MT_OS.csv")
+aggregateRanks_Male_WT_OS <- read.csv("aggregateRanks_Male_WT_OS.csv")
+aggregateRanks_Female_MT_OS <- read.csv("aggregateRanks_Female_MT_OS.csv")
+aggregateRanks_Female_WT_OS <- read.csv("aggregateRanks_Female_WT_OS.csv")
+
+Male_MT_OS<-subset(aggregateRanks_Male_MT_OS,Score<0.05)$Name
+Male_WT_OS<-subset(aggregateRanks_Male_WT_OS,Score<0.05)$Name
+Female_MT_OS<-subset(aggregateRanks_Female_MT_OS,Score<0.05)$Name
+Female_WT_OS<-subset(aggregateRanks_Female_WT_OS,Score<0.05)$Name
+
+aggregateRanks_Male_MT_PFS <- read.csv("aggregateRanks_Male_MT_PFS.csv")
+aggregateRanks_Male_WT_PFS <- read.csv("aggregateRanks_Male_WT_PFS.csv")
+aggregateRanks_Female_MT_PFS <- read.csv("aggregateRanks_Female_MT_PFS.csv")
+aggregateRanks_Female_WT_PFS <- read.csv("aggregateRanks_Female_WT_PFS.csv")
+
+Male_MT_PFS<-subset(aggregateRanks_Male_MT_PFS,Score<0.05)$Name
+Male_WT_PFS<-subset(aggregateRanks_Male_WT_PFS,Score<0.05)$Name
+Female_MT_PFS<-subset(aggregateRanks_Female_MT_PFS,Score<0.05)$Name
+Female_WT_PFS<-subset(aggregateRanks_Female_WT_PFS,Score<0.05)$Name
+```
+
+## Subset
+```{r}
+geo.m <-subset(geo,sex=="Male")
+geo.m$stage <- as.factor(geo.m$stage)
+geo.f <-subset(geo,sex=="Female")
+geo.f$stage <- as.factor(geo.f$stage)
+
+tcga.m <-subset(tcga123,sex=="Male")
+tcga.m$stage <- as.factor(tcga.m$stage)
+tcga.f <-subset(tcga123,sex=="Female")
+tcga.f$stage <- as.factor(tcga.f$stage)
+```
+
+# Partial Plots using 1000 bootstraps
+```{r}
+B<-1000
+ntree <- 300	
+```
+
+## OS Male
+```{r}
+gene_list<-Male_OS
+ml <- subset(geo.m,!is.na(os5.months) & os5.months>0& !is.na(os5.status)&os5.status!="")[,c("os5.months","os5.status","age","stage",gene_list)]
+nsplit <- round(nrow(ml)/15)				
+nodesize <- round(nrow(ml)/length(ml$os.status[ml$os.status==1])/2) 
+
+num_cores <- detectCores() - 1
+cl <- makeCluster(num_cores)
+clusterEvalQ(cl, library(randomForestSRC))
+clusterExport(cl, list("ml", "nsplit", "nodesize", "ntree","gene_list"))
+sleep_for_a_minute <- function() { Sys.sleep(60) }
+start_time <- Sys.time()
+results <- parLapply(cl, 1:B, rsfbe.plot.os5)
+end_time <- Sys.time()
+print(end_time - start_time)
+stopCluster(cl)
+#########Process on results#####
+gene.name <- unlist(lapply(results, `[[`, 1))
+Gene.exp <- unlist(lapply(results, `[[`, 2))
+survprob <- unlist(lapply(results, `[[`, 3))
+Time_point <- unlist(lapply(results, `[[`, 4))
+result<-as.data.frame(cbind(gene.name=gene.name, Gene.exp=Gene.exp,
+                        survprob=survprob,
+                        Time_point=Time_point))
+result[,c(2:3)] <- sapply(result[,c(2:3)],as.numeric)
+saveRDS(result, file = paste0("PartialPlot_NoSmooth_","geo.m","_","Male_OS",".rds"))
+#########data of partial plots#####
+# result<-readRDS("PartialPlot_NoSmooth_geo.m_Male_OS.rds")
+rs.3<-data.frame()
+for(i in 1:length(gene_list)){
+  rs.3 <- rbind(rs.3,extract_partial(i,result,"Time = 3-year"))
+}
+rs.5<-data.frame()
+for(i in 1:length(gene_list)){
+  rs.5 <- rbind(rs.5,extract_partial(i,result,"Time = 5-year"))
+}
+rs<-rbind(rs.3,rs.5)
+rs[,c(2:5)] <- sapply(rs[,c(2:5)],as.numeric)
+rs$Time_point<- factor(rs$Time_point,levels=c("Time = 5-year","Time = 3-year"))
+
+#########plot partial plots#####
+svg(filename=paste0("PartialPlot_aggrank_NoSmooth_","geo.m","_","Male_OS",".svg"),width = 11, height = 16)
+partialplot.func(rs,"Males (GSE39582)","Overall survival",ncol=4)
+dev.off()
+```
+## OS Female
+```{r}
+gene_list<-Female_OS
+ml <- subset(geo.f,!is.na(os5.months) & os5.months>0& !is.na(os5.status)&os5.status!="")[,c("os5.months","os5.status","age","stage",gene_list)]
+nsplit <- round(nrow(ml)/15)				
+nodesize <-round(nrow(ml)/length(ml$os.status[ml$os.status==1])/2) 
+
+num_cores <- detectCores() - 1
+cl <- makeCluster(num_cores)
+clusterEvalQ(cl, library(randomForestSRC))
+clusterExport(cl, list("ml", "nsplit", "nodesize", "ntree","gene_list"))
+sleep_for_a_minute <- function() { Sys.sleep(60) }
+start_time <- Sys.time()
+results <- parLapply(cl, 1:B, rsfbe.plot.os5)
+end_time <- Sys.time()
+print(end_time - start_time)
+stopCluster(cl)
+#########Process on results#####
+gene.name <- unlist(lapply(results, `[[`, 1))
+Gene.exp <- unlist(lapply(results, `[[`, 2))
+survprob <- unlist(lapply(results, `[[`, 3))
+Time_point <- unlist(lapply(results, `[[`, 4))
+result<-as.data.frame(cbind(gene.name=gene.name, Gene.exp=Gene.exp,
+                        survprob=survprob,
+                        Time_point=Time_point))
+result[,c(2:3)] <- sapply(result[,c(2:3)],as.numeric)
+saveRDS(result, file = paste0("PartialPlot_NoSmooth_","geo.f","_","Female_OS",".rds"))
+#########data of partial plots#####
+result<-readRDS("PartialPlot_NoSmooth_geo.f_Female_OS.rds")
+rs.3<-data.frame()
+for(i in 1:length(gene_list)){
+  rs.3 <- rbind(rs.3,extract_partial(i,result,"Time = 3-year"))
+}
+rs.5<-data.frame()
+for(i in 1:length(gene_list)){
+  rs.5 <- rbind(rs.5,extract_partial(i,result,"Time = 5-year"))
+}
+rs<-rbind(rs.3,rs.5)
+rs[,c(2:5)] <- sapply(rs[,c(2:5)],as.numeric)
+rs$Time_point<- factor(rs$Time_point,levels=c("Time = 5-year","Time = 3-year"))
+
+#########plot partial plots#####
+svg(filename=paste0("PartialPlot_aggrank_NoSmooth_","geo.f","_","Female_OS",".svg"),width = 11, height = 16)
+partialplot.func(rs,"Females (GSE39582)","Overall survival",ncol=4)
+dev.off()
+```
+## OS Male MT
+```{r}
+gene_list<-Male_MT_OS
+ml <- subset(geo.m,KRAS_mut=="1: Mutant"&!is.na(os5.months) & os5.months>0& !is.na(os5.status)&os5.status!="")[,c("os5.months","os5.status","age","stage",gene_list)]
+nsplit <- round(nrow(ml)/15)					# number of node splits
+nodesize <- round(nrow(ml)/length(ml$os.status[ml$os.status==1])/2) 
+
+num_cores <- detectCores() - 1
+cl <- makeCluster(num_cores)
+clusterEvalQ(cl, library(randomForestSRC))
+clusterExport(cl, list("ml", "nsplit", "nodesize", "ntree","gene_list"))
+sleep_for_a_minute <- function() { Sys.sleep(60) }
+start_time <- Sys.time()
+results <- parLapply(cl, 1:B, rsfbe.plot.os5)
+end_time <- Sys.time()
+print(end_time - start_time)
+stopCluster(cl)
+#########Process on results#####
+gene.name <- unlist(lapply(results, `[[`, 1))
+Gene.exp <- unlist(lapply(results, `[[`, 2))
+survprob <- unlist(lapply(results, `[[`, 3))
+Time_point <- unlist(lapply(results, `[[`, 4))
+result<-as.data.frame(cbind(gene.name=gene.name, Gene.exp=Gene.exp,
+                        survprob=survprob,
+                        Time_point=Time_point))
+result[,c(2:3)] <- sapply(result[,c(2:3)],as.numeric)
+saveRDS(result, file = paste0("PartialPlot_NoSmooth_","geo.m","_","Male_MT_OS",".rds"))
+#########data of partial plots#####
+result<-readRDS("PartialPlot_NoSmooth_geo.m_Male_MT_OS.rds")
+rs.3<-data.frame()
+for(i in 1:length(gene_list)){
+  rs.3 <- rbind(rs.3,extract_partial(i,result,"Time = 3-year"))
+}
+rs.5<-data.frame()
+for(i in 1:length(gene_list)){
+  rs.5 <- rbind(rs.5,extract_partial(i,result,"Time = 5-year"))
+}
+rs<-rbind(rs.3,rs.5)
+rs[,c(2:5)] <- sapply(rs[,c(2:5)],as.numeric)
+rs$Time_point<- factor(rs$Time_point,levels=c("Time = 5-year","Time = 3-year"))
+
+#########plot partial plots#####
+svg(filename=paste0("PartialPlot_aggrank_NoSmooth_","geo.m","_","Male_MT_OS",".svg"),width = 11, height = 16)
+partialplot.func(rs,"Males with KRAS MT (GSE39582)","Overall survival",ncol=3)
+dev.off()
+```
+## OS Male WT
+```{r}
+gene_list<-Male_WT_OS
+ml <- subset(geo.m,KRAS_mut=="0: WT"&!is.na(os5.months) & os5.months>0& !is.na(os5.status)&os5.status!="")[,c("os5.months","os5.status","age","stage",gene_list)]
+nsplit <- round(nrow(ml)/15)					# number of node splits
+nodesize <- round(nrow(ml)/length(ml$os.status[ml$os.status==1])/2) 
+
+num_cores <- detectCores() - 1
+cl <- makeCluster(num_cores)
+clusterEvalQ(cl, library(randomForestSRC))
+clusterExport(cl, list("ml", "nsplit", "nodesize", "ntree","gene_list"))
+sleep_for_a_minute <- function() { Sys.sleep(60) }
+start_time <- Sys.time()
+results <- parLapply(cl, 1:B, rsfbe.plot.os5)
+end_time <- Sys.time()
+print(end_time - start_time)
+stopCluster(cl)
+#########Process on results#####
+gene.name <- unlist(lapply(results, `[[`, 1))
+Gene.exp <- unlist(lapply(results, `[[`, 2))
+survprob <- unlist(lapply(results, `[[`, 3))
+Time_point <- unlist(lapply(results, `[[`, 4))
+result<-as.data.frame(cbind(gene.name=gene.name, Gene.exp=Gene.exp,
+                        survprob=survprob,
+                        Time_point=Time_point))
+result[,c(2:3)] <- sapply(result[,c(2:3)],as.numeric)
+saveRDS(result, file = paste0("PartialPlot_NoSmooth_","geo.m","_","Male_WT_OS",".rds"))
+#########data of partial plots#####
+readRDS("PartialPlot_NoSmooth_geo.m_Male_WT_OS.rds")
+rs.3<-data.frame()
+for(i in 1:length(gene_list)){
+  rs.3 <- rbind(rs.3,extract_partial(i,result,"Time = 3-year"))
+}
+rs.5<-data.frame()
+for(i in 1:length(gene_list)){
+  rs.5 <- rbind(rs.5,extract_partial(i,result,"Time = 5-year"))
+}
+rs<-rbind(rs.3,rs.5)
+rs[,c(2:5)] <- sapply(rs[,c(2:5)],as.numeric)
+rs$Time_point<- factor(rs$Time_point,levels=c("Time = 5-year","Time = 3-year"))
+
+#########plot partial plots#####
+svg(filename=paste0("PartialPlot_aggrank_NoSmooth_","geo.m","_","Male_WT_OS",".svg"),width = 11, height = 16)
+partialplot.func(rs,"Males with KRAS WT (GSE39582)","Overall survival",ncol=4)
+dev.off()
+```
+## OS female MT
+```{r}
+gene_list<-Female_MT_OS
+ml <- subset(geo.f,KRAS_mut=="1: Mutant"&!is.na(os5.months) & os5.months>0& !is.na(os5.status)&os5.status!="")[,c("os5.months","os5.status","age","stage",gene_list)]
+nsplit <- round(nrow(ml)/15)					# number of node splits
+nodesize <- round(nrow(ml)/length(ml$os.status[ml$os.status==1])/2) 
+
+num_cores <- detectCores() - 1
+cl <- makeCluster(num_cores)
+clusterEvalQ(cl, library(randomForestSRC))
+clusterExport(cl, list("ml", "nsplit", "nodesize", "ntree","gene_list"))
+sleep_for_a_minute <- function() { Sys.sleep(60) }
+start_time <- Sys.time()
+results <- parLapply(cl, 1:B, rsfbe.plot.os5)
+end_time <- Sys.time()
+print(end_time - start_time)
+stopCluster(cl)
+#########Process on results#####
+gene.name <- unlist(lapply(results, `[[`, 1))
+Gene.exp <- unlist(lapply(results, `[[`, 2))
+survprob <- unlist(lapply(results, `[[`, 3))
+Time_point <- unlist(lapply(results, `[[`, 4))
+result<-as.data.frame(cbind(gene.name=gene.name, Gene.exp=Gene.exp,
+                        survprob=survprob,
+                        Time_point=Time_point))
+result[,c(2:3)] <- sapply(result[,c(2:3)],as.numeric)
+saveRDS(result, file = paste0("PartialPlot_NoSmooth_","geo.f","_","Female_MT_OS",".rds"))
+#########data of partial plots#####
+# readRDS("PartialPlot_NoSmooth_","geo.f","_","Female_MT_OS",".rds")
+rs.3<-data.frame()
+for(i in 1:length(gene_list)){
+  rs.3 <- rbind(rs.3,extract_partial(i,result,"Time = 3-year"))
+}
+rs.5<-data.frame()
+for(i in 1:length(gene_list)){
+  rs.5 <- rbind(rs.5,extract_partial(i,result,"Time = 5-year"))
+}
+rs<-rbind(rs.3,rs.5)
+rs[,c(2:5)] <- sapply(rs[,c(2:5)],as.numeric)
+rs$Time_point<- factor(rs$Time_point,levels=c("Time = 5-year","Time = 3-year"))
+
+#########plot partial plots#####
+svg(filename=paste0("PartialPlot_aggrank_NoSmooth_","geo.f","_","Female_MT_OS",".svg"),width = 12, height = 14)
+partialplot.func(rs,"Females with KRAS MT (GSE39582)","Overall survival",ncol=4)
+dev.off()
+```
+## OS female WT
+```{r}
+gene_list<-Female_WT_OS
+ml <- subset(geo.f,KRAS_mut=="0: WT"&!is.na(os5.months) & os5.months>0& !is.na(os5.status)&os5.status!="")[,c("os5.months","os5.status","age","stage",gene_list)]
+nsplit <- round(nrow(ml)/15)					# number of node splits
+nodesize <- round(nrow(ml)/length(ml$os.status[ml$os.status==1])/2) 
+
+num_cores <- detectCores() - 1
+cl <- makeCluster(num_cores)
+clusterEvalQ(cl, library(randomForestSRC))
+clusterExport(cl, list("ml", "nsplit", "nodesize", "ntree","gene_list"))
+sleep_for_a_minute <- function() { Sys.sleep(60) }
+start_time <- Sys.time()
+results <- parLapply(cl, 1:B, rsfbe.plot.os5)
+end_time <- Sys.time()
+print(end_time - start_time)
+stopCluster(cl)
+#########Process on results#####
+gene.name <- unlist(lapply(results, `[[`, 1))
+Gene.exp <- unlist(lapply(results, `[[`, 2))
+survprob <- unlist(lapply(results, `[[`, 3))
+Time_point <- unlist(lapply(results, `[[`, 4))
+result<-as.data.frame(cbind(gene.name=gene.name, Gene.exp=Gene.exp,
+                        survprob=survprob,
+                        Time_point=Time_point))
+result[,c(2:3)] <- sapply(result[,c(2:3)],as.numeric)
+saveRDS(result, file = paste0("PartialPlot_NoSmooth_","geo.f","_","Female_WT_OS",".rds"))
+#########data of partial plots#####
+# readRDS("PartialPlot_NoSmooth_","geo.f","_","Female_WT_OS",".rds")
+rs.3<-data.frame()
+for(i in 1:length(gene_list)){
+  rs.3 <- rbind(rs.3,extract_partial(i,result,"Time = 3-year"))
+}
+rs.5<-data.frame()
+for(i in 1:length(gene_list)){
+  rs.5 <- rbind(rs.5,extract_partial(i,result,"Time = 5-year"))
+}
+rs<-rbind(rs.3,rs.5)
+rs[,c(2:5)] <- sapply(rs[,c(2:5)],as.numeric)
+rs$Time_point<- factor(rs$Time_point,levels=c("Time = 5-year","Time = 3-year"))
+
+#########plot partial plots#####
+svg(filename=paste0("PartialPlot_aggrank_NoSmooth_","geo.f","_","Female_WT_OS",".svg"),width = 12, height = 14)
+partialplot.func(rs,"Females with KRAS WT (GSE39582)","Overall survival",ncol=4)
+dev.off()
+```
+
+PFS model adopted a similar structure...
