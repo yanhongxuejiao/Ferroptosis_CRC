@@ -1,2 +1,2 @@
 # Ferr_CRC_Project
-![Figure 1 Flowchart 11062023](https://github.com/XinyiShen0304/Ferr_CRC_Project/assets/54633790/40d6f865-0e48-45ec-9229-49fdfaa0a4f6)
+![image](https://github.com/user-attachments/assets/127177f2-5486-4aa5-8c14-4247c0c5f1ec)
